@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mini Fortnite: Reload System</title>
+<style>
+  body{margin:0;overflow:hidden;}
+  canvas{display:block;}
+  #ui{position:absolute;top:10px;left:10px;color:white;font-family:sans-serif;font-size:18px;}
+  #crosshair{position:absolute;top:50%;left:50%;width:10px;height:10px;margin-left:-5px;margin-top:-5px;background:red;border-radius:50%;}
+  #minimap{position:absolute;top:10px;right:10px;width:200px;height:200px;background:rgba(0,0,0,0.5);}
+  #healthBar{position:absolute;top:150px;left:10px;width:200px;height:20px;background:#555;}
+  #healthFill{width:200px;height:20px;background:red;}
+  #reloadBar{width:100px;height:10px;background:#555;margin-top:5px;}
+  #reloadFill{width:0%;height:10px;background:#0f0;}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="score">Score: 0</div>
+  <div id="structure">Wall</div>
+  <div id="rotation">0°</div>
+  <div id="weapon">Weapon: Pistol</div>
+  <div id="ammo">Ammo: 10/10</div>
+  <div id="material">Material: Wood</div>
+  <div id="reloadBar"><div id="reloadFill"></div></div>
+</div>
+<div id="crosshair"></div>
+<div id="minimap"></div>
+<div id="healthBar"><div id="healthFill"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.154.0/examples/js/controls/PointerLockControls.js"></script>
+
+<script>
+// ======================== Variables ========================
+let scene,camera,renderer,controls;
+let bullets=[],enemyBullets=[],objects=[],enemies=[],pickups=[];
+let velocity=new THREE.Vector3(),direction=new THREE.Vector3();
+let canJump=false,moveForward=false,moveBackward=false,moveLeft=false,moveRight=false;
+let score=0,selectedStructure='Wall',rotation=0;
+let health=100,material='Wood';
+const stormRadiusStart=25; let stormRadius=stormRadiusStart,stormShrinkInterval=30,stormTimer=0;
+
+// ======================== Sounds ========================
+const sounds = {
+  pistol: new Audio('sounds/pistol.mp3'),
+  rifle: new Audio('sounds/rifle.mp3'),
+  shotgun: new Audio('sounds/shotgun.mp3'),
+  enemyShot: new Audio('sounds/enemy_shot.mp3'),
+  pickup: new Audio('sounds/pickup.mp3'),
+  build: new Audio('sounds/build.mp3'),
+  storm: new Audio('sounds/storm.mp3'),
+  reload: new Audio('sounds/reload.mp3')
+};
+
+// ======================== Weapons ========================
+let weapons={
+  Pistol: {name:'Pistol',damage:10,fireRate:0.3,ammo:10,maxAmmo:10,lastShot:0,reloadTime:1.2,reloading:false},
+  Rifle: {name:'Rifle',damage:15,fireRate:0.1,ammo:20,maxAmmo:20,lastShot:0,reloadTime:2,reloading:false},
+  Shotgun: {name:'Shotgun',damage:30,fireRate:1,ammo:5,maxAmmo:5,lastShot:0,reloadTime:2.5,reloading:false}
+};
+let currentWeapon=weapons.Pistol;
+
+// ======================== Scene Setup ========================
+scene=new THREE.Scene(); scene.background=new THREE.Color(0x87ceeb);
+camera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1000); camera.position.y=2;
+renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setSize(window.innerWidth,window.innerHeight);
+document.body.appendChild(renderer.domElement);
+controls=new THREE.PointerLockControls(camera,document.body);
+document.body.addEventListener('click',()=>{controls.lock();});
+
+// Floor
+const floorGeo=new THREE.BoxGeometry(50,1,50);
+const floorMat=new THREE.MeshPhongMaterial({color:0x228B22});
+const floor=new THREE.Mesh(floorGeo,floorMat); floor.position.y=-0.5;
+scene.add(floor); objects.push(floor);
+
+// Lights
+const light=new THREE.DirectionalLight(0xffffff,1); light.position.set(10,20,10);
+scene.add(light); scene.add(new THREE.AmbientLight(0xffffff,0.3));
+
+// ======================== Controls ========================
+document.addEventListener('keydown',(e)=>{
+  switch(e.code){
+    case 'ArrowUp': case 'KeyW': moveForward=true; break;
+    case 'ArrowLeft': case 'KeyA': moveLeft=true; break;
+    case 'ArrowDown': case 'KeyS': moveBackward=true; break;
+    case 'ArrowRight': case 'KeyD': moveRight=true; break;
+    case 'Space': if(canJump){velocity.y+=7; canJump=false;} break;
+    case 'KeyE': buildStructure(); break;
+    case 'KeyQ': removeWall(); break;
+    case 'KeyR': reloadWeapon(); break;
+    case 'Digit1': selectedStructure='Wall'; updateUI(); break;
+    case 'Digit2': selectedStructure='Ramp'; updateUI(); break;
+    case 'Digit3': selectedStructure='Floor'; updateUI(); break;
+    case 'Digit4': selectedStructure='Roof'; updateUI(); break;
+    case 'KeyZ': material='Wood'; updateUI(); break;
+    case 'KeyX': material='Brick'; updateUI(); break;
+    case 'KeyC': material='Metal'; updateUI(); break;
+    case 'Digit5': switchWeapon('Pistol'); break;
+    case 'Digit6': switchWeapon('Rifle'); break;
+    case 'Digit7': switchWeapon('Shotgun'); break;
+  }
+});
+document.addEventListener('keyup',(e)=>{
+  switch(e.code){
+    case 'ArrowUp': case 'KeyW': moveForward=false; break;
+    case 'ArrowLeft': case 'KeyA': moveLeft=false; break;
+    case 'ArrowDown': case 'KeyS': moveBackward=false; break;
+    case 'ArrowRight': case 'KeyD': moveRight=false; break;
+  }
+});
+
+// ======================== UI ========================
+function updateUI(){
+  document.getElementById('score').innerText="Score: "+score;
+  document.getElementById('structure').innerText=selectedStructure;
+  document.getElementById('rotation').innerText=rotation+"°";
+  document.getElementById('weapon').innerText="Weapon: "+currentWeapon.name;
+  document.getElementById('ammo').innerText="Ammo: "+currentWeapon.ammo+"/"+currentWeapon.maxAmmo;
+  document.getElementById('material').innerText="Material: "+material;
+}
+
+// ======================== Reload ========================
+function reloadWeapon(){
+  if(currentWeapon.reloading || currentWeapon.ammo === currentWeapon.maxAmmo) return;
+  currentWeapon.reloading = true;
+  sounds.reload.play();
+  const startTime = performance.now();
+  const reloadTimeMs = currentWeapon.reloadTime*1000;
+  const interval = setInterval(()=>{
+    const elapsed = performance.now() - startTime;
+    const percent = Math.min(100,(elapsed/reloadTimeMs)*100);
+    document.getElementById('reloadFill').style.width = percent + '%';
+    if(elapsed >= reloadTimeMs){
+      clearInterval(interval);
+      currentWeapon.ammo = currentWeapon.maxAmmo;
+      currentWeapon.reloading = false;
+      document.getElementById('reloadFill').style.width = '0%';
+      updateUI();
+    }
+  },16);
+}
+
+// ======================== Weapons Functions ========================
+function switchWeapon(name){if(weapons[name]) currentWeapon=weapons[name]; updateUI();}
+
+// ======================== Build, Enemies, Pickups, Shooting, Minimap, Animation ========================
+// ... (All previous code for building, Shotgun spread shooting, enemy AI, pickups, HUD, storm, movement, mini-map) ...
+
+</script>
+</body>
+</html>
